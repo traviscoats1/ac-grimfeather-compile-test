@@ -42,7 +42,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "git checkout failed for $Repo @ $Sha" }
 
             $actual = (git -C $Dest rev-parse HEAD).Trim()
-            if ($actual -ne $Sha) { throw "SHA mismatch for $Repo: expected $Sha, got $actual" }
+            if ($actual -ne $Sha) { throw "SHA mismatch for ${Repo}: expected $Sha, got $actual" }
             Write-Host "$Repo  $actual"
             Write-Host "::endgroup::"
           }
