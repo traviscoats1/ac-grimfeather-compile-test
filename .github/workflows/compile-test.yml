@@ -1,0 +1,196 @@
+name: Grimfeather full-stack Windows compile
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - ".github/workflows/compile-test.yml"
+      - "BUILD-MANIFEST.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: windows-2022
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout compatibility-test repo
+        uses: actions/checkout@v4
+
+      - name: Clone pinned core and modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Checkout-Pinned {
+            param(
+              [Parameter(Mandatory=$true)][string]$Repo,
+              [Parameter(Mandatory=$true)][string]$Sha,
+              [Parameter(Mandatory=$true)][string]$Dest
+            )
+
+            Write-Host "::group::Checkout $Repo @ $Sha"
+            git init $Dest
+            if ($LASTEXITCODE -ne 0) { throw "git init failed for $Repo" }
+            git -C $Dest remote add origin "https://github.com/$Repo.git"
+            git -C $Dest fetch --depth 1 origin $Sha
+            if ($LASTEXITCODE -ne 0) { throw "git fetch failed for $Repo @ $Sha" }
+            git -C $Dest checkout --detach FETCH_HEAD
+            if ($LASTEXITCODE -ne 0) { throw "git checkout failed for $Repo @ $Sha" }
+
+            $actual = (git -C $Dest rev-parse HEAD).Trim()
+            if ($actual -ne $Sha) { throw "SHA mismatch for $Repo: expected $Sha, got $actual" }
+            Write-Host "$Repo  $actual"
+            Write-Host "::endgroup::"
+          }
+
+          Checkout-Pinned "Grimfeather/azerothcore-wotlk" "1a7e71b30226444b8403662b073e5b764535cd10" "core"
+
+          New-Item -ItemType Directory -Force -Path "core/modules" | Out-Null
+
+          $modules = @(
+            @("mod-playerbots/mod-playerbots", "7bae1b5c58c76a0aa20381155edc08096d1485b2", "mod-playerbots"),
+            @("Grimfeather/mod-individual-progression", "d5e393bdc4624239d432d27d3ad2178abf8b94e9", "mod-individual-progression"),
+            @("Grimfeather/mod-character-services", "f43bc2c98aa7a291b673158fd578be304607b5e1", "mod-character-services"),
+            @("Grimfeather/mod-reagent-bank-account", "80bfaa41ef604c22a0afce93e286f7e043f2b430", "mod-reagent-bank-account"),
+            @("azerothcore/mod-ah-bot", "c11d8318cbd8714a9980f9464f78e07d3d48a70a", "mod-ah-bot"),
+            @("azerothcore/mod-transmog", "0d85cbc53d63ce2df8527169ce6ae47f5f6f6ba8", "mod-transmog"),
+            @("azerothcore/mod-account-mounts", "0a3b4c4cc084ebbbb7e7e07f88222a08a70b0dde", "mod-account-mounts"),
+            @("azerothcore/mod-account-achievements", "bfbe3677635feeef823057964e028e023633115a", "mod-account-achievements"),
+            @("azerothcore/mod-individual-xp", "503471f766bc4f21dca0aa05e6a9d3d40718a780", "mod-individual-xp"),
+            @("azerothcore/mod-ale", "bd74eae623ca63154d3eb49e1d187e872ef13370", "mod-ale"),
+            @("jrad7/mod-dungeon-clear", "805b909c7286348e75d0561f8cc259750e6ae62b", "mod-dungeon-clear"),
+            @("Wishmaster117/mod-multibot-bridge", "1da05982e478cb00e0b6c87314afe7e0e9653ffb", "mod-multibot-bridge"),
+            @("azerothcore/mod-aoe-loot", "57279b660a278e9b3a1afa425e7c7a5edc72b7bb", "mod-aoe-loot"),
+            @("noisiver/mod-junk-to-gold", "2134690bb03899e5c9e44d0682e8e6abf0bbbaf2", "mod-junk-to-gold"),
+            @("azerothcore/mod-npc-enchanter", "af32add66eafc0e0eb8775999e76ceed75f18b74", "mod-npc-enchanter"),
+            @("azerothcore/mod-npc-buffer", "532a6ba80c31b673338fcdb747cb2226bec4887e", "mod-npc-buffer"),
+            @("Zerathane/mod-token-turnin", "73e447c499751559549e129a39c58c42fe661e73", "mod-token-turnin"),
+            @("azerothcore/mod-skip-dk-starting-area", "cd0bac42056cc469399487269acbb96264ff813e", "mod-skip-dk-starting-area")
+          )
+
+          foreach ($m in $modules) {
+            Checkout-Pinned $m[0] $m[1] ("core/modules/" + $m[2])
+          }
+
+          "Core and module SHAs resolved by the test runner:" | Set-Content resolved-shas.txt
+          ("Grimfeather/azerothcore-wotlk    " + (git -C core rev-parse HEAD)) | Add-Content resolved-shas.txt
+          foreach ($m in $modules) {
+            $actual = (git -C ("core/modules/" + $m[2]) rev-parse HEAD).Trim()
+            ($m[0] + "    " + $actual) | Add-Content resolved-shas.txt
+          }
+          Get-Content resolved-shas.txt
+
+      - name: Prepare Windows build dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $deps = Join-Path $env:RUNNER_TEMP "ac-deps"
+          New-Item -ItemType Directory -Force -Path $deps | Out-Null
+
+          # Versions and binary sources mirror kasperfriend/azerothcore-oneclick-compiler.
+          $boostRoot = Join-Path $deps "boost_1_87_0"
+          $boostExe = Join-Path $deps "boost.exe"
+          curl.exe -L --fail --retry 3 -o $boostExe "https://archives.boost.io/release/1.87.0/binaries/boost_1_87_0-msvc-14.3-64.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Boost download failed" }
+
+          $boostLog = Join-Path $deps "boost-install.log"
+          $argLine = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /NOCANCEL /DIR="{0}" /LOG="{1}"' -f $boostRoot, $boostLog
+          $p = Start-Process $boostExe -ArgumentList $argLine -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Boost installer failed with exit code $($p.ExitCode)" }
+          if (-not (Test-Path (Join-Path $boostRoot "boost/version.hpp"))) { throw "Boost headers missing" }
+          if (-not (Test-Path (Join-Path $boostRoot "lib64-msvc-14.3"))) { throw "Boost MSVC libraries missing" }
+
+          $opensslZip = Join-Path $deps "openssl-3.5.7.zip"
+          curl.exe -L --fail --retry 3 -o $opensslZip "https://download.firedaemon.com/FireDaemon-OpenSSL/openssl-3.5.7.zip"
+          if ($LASTEXITCODE -ne 0) { throw "OpenSSL download failed" }
+          $opensslAll = Join-Path $deps "openssl-all"
+          $opensslRoot = Join-Path $deps "openssl-x64"
+          New-Item -ItemType Directory -Force -Path $opensslAll,$opensslRoot | Out-Null
+          Expand-Archive $opensslZip $opensslAll -Force
+          $x64 = Get-ChildItem $opensslAll -Directory -Recurse |
+            Where-Object { $_.Name -eq "x64" -and (Test-Path (Join-Path $_.FullName "include/openssl/ssl.h")) } |
+            Select-Object -First 1
+          if (-not $x64) { throw "OpenSSL x64 development tree not found" }
+          Copy-Item (Join-Path $x64.FullName "*") $opensslRoot -Recurse -Force
+          $sslDir = Get-ChildItem $opensslAll -Directory -Recurse | Where-Object { $_.Name -eq "ssl" } | Select-Object -First 1
+          if ($sslDir) { Copy-Item $sslDir.FullName (Join-Path $opensslRoot "ssl") -Recurse -Force }
+          if (-not (Test-Path (Join-Path $opensslRoot "include/openssl/ssl.h"))) { throw "OpenSSL headers missing" }
+
+          $mysqlZip = Join-Path $deps "mysql-8.4.9-winx64.zip"
+          curl.exe -L --fail --retry 3 -o $mysqlZip "https://cdn.mysql.com/archives/mysql-8.4/mysql-8.4.9-winx64.zip"
+          if ($LASTEXITCODE -ne 0) { throw "MySQL download failed" }
+          $mysqlExtract = Join-Path $deps "mysql-extract"
+          New-Item -ItemType Directory -Force -Path $mysqlExtract | Out-Null
+          Expand-Archive $mysqlZip $mysqlExtract -Force
+          $mysqlRoot = (Get-ChildItem $mysqlExtract -Directory | Select-Object -First 1).FullName
+          if (-not (Test-Path (Join-Path $mysqlRoot "include/mysql.h"))) { throw "MySQL headers missing" }
+          if (-not (Test-Path (Join-Path $mysqlRoot "lib/mysqlclient.lib"))) { throw "MySQL client library missing" }
+
+          "BOOST_ROOT=$boostRoot" | Add-Content $env:GITHUB_ENV
+          "OPENSSL_ROOT_DIR=$opensslRoot" | Add-Content $env:GITHUB_ENV
+          "MYSQL_ROOT=$mysqlRoot" | Add-Content $env:GITHUB_ENV
+
+          Write-Host "Boost:   $boostRoot"
+          Write-Host "OpenSSL: $opensslRoot"
+          Write-Host "MySQL:   $mysqlRoot"
+          cmake --version
+          git --version
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $boost = $env:BOOST_ROOT.Replace("\","/")
+          $openssl = $env:OPENSSL_ROOT_DIR.Replace("\","/")
+          $mysql = $env:MYSQL_ROOT.Replace("\","/")
+
+          $args = @(
+            "-S", "core",
+            "-B", "build",
+            "-G", "Visual Studio 17 2022",
+            "-A", "x64",
+            "-DMODULES=static",
+            "-DSCRIPTS=static",
+            "-DBOOST_ROOT=$boost",
+            "-DOPENSSL_ROOT_DIR=$openssl",
+            "-DOPENSSL_USE_STATIC_LIBS=FALSE",
+            "-DMYSQL_INCLUDE_DIR=$mysql/include",
+            "-DMYSQL_LIBRARY=$mysql/lib/mysqlclient.lib",
+            "-DMYSQL_EXECUTABLE=$mysql/bin/mysql.exe"
+          )
+
+          & cmake @args
+          if ($LASTEXITCODE -ne 0) { throw "CMake configuration failed" }
+
+      - name: Compile authserver and worldserver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake --build build --config RelWithDebInfo --target authserver worldserver --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Compilation failed" }
+
+      - name: Verify binaries
+        shell: pwsh
+        run: |
+          $world = Get-ChildItem build -Recurse -Filter worldserver.exe | Select-Object -First 1
+          $auth = Get-ChildItem build -Recurse -Filter authserver.exe | Select-Object -First 1
+          if (-not $world) { throw "worldserver.exe was not produced" }
+          if (-not $auth) { throw "authserver.exe was not produced" }
+
+          Write-Host "worldserver: $($world.FullName)"
+          Write-Host "authserver:  $($auth.FullName)"
+          "## BUILD PASSED" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "The pinned Grimfeather + Playerbots + full compiled module stack produced both worldserver.exe and authserver.exe on Windows Server 2022 / Visual Studio 2022." | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload resolved SHA manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolved-source-shas
+          path: resolved-shas.txt
+          if-no-files-found: warn
