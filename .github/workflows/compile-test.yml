@@ -47,9 +47,9 @@ jobs:
             Write-Host "::endgroup::"
           }
 
-          Checkout-Pinned "Grimfeather/azerothcore-wotlk" "1a7e71b30226444b8403662b073e5b764535cd10" "core"
+          Checkout-Pinned "Grimfeather/azerothcore-wotlk" "1a7e71b30226444b8403662b073e5b764535cd10" "D:\\c"
 
-          New-Item -ItemType Directory -Force -Path "core/modules" | Out-Null
+          New-Item -ItemType Directory -Force -Path "D:\\c\\modules" | Out-Null
 
           $modules = @(
             @("mod-playerbots/mod-playerbots", "7bae1b5c58c76a0aa20381155edc08096d1485b2", "mod-playerbots"),
@@ -73,13 +73,13 @@ jobs:
           )
 
           foreach ($m in $modules) {
-            Checkout-Pinned $m[0] $m[1] ("core/modules/" + $m[2])
+            Checkout-Pinned $m[0] $m[1] ("D:\\c\\modules\\" + $m[2])
           }
 
           "Core and module SHAs resolved by the test runner:" | Set-Content resolved-shas.txt
-          ("Grimfeather/azerothcore-wotlk    " + (git -C core rev-parse HEAD)) | Add-Content resolved-shas.txt
+          ("Grimfeather/azerothcore-wotlk    " + (git -C D:\\c rev-parse HEAD)) | Add-Content resolved-shas.txt
           foreach ($m in $modules) {
-            $actual = (git -C ("core/modules/" + $m[2]) rev-parse HEAD).Trim()
+            $actual = (git -C ("D:\\c\\modules\\" + $m[2]) rev-parse HEAD).Trim()
             ($m[0] + "    " + $actual) | Add-Content resolved-shas.txt
           }
           Get-Content resolved-shas.txt
@@ -149,8 +149,8 @@ jobs:
           $mysql = $env:MYSQL_ROOT.Replace("\","/")
 
           $args = @(
-            "-S", "core",
-            "-B", "build",
+            "-S", "D:/c",
+            "-B", "D:/b",
             "-G", "Visual Studio 17 2022",
             "-A", "x64",
             "-DMODULES=static",
@@ -170,14 +170,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cmake --build build --config RelWithDebInfo --target authserver worldserver --parallel 2
+          cmake --build D:/b --config RelWithDebInfo --target authserver worldserver --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "Compilation failed" }
 
       - name: Verify binaries
         shell: pwsh
         run: |
-          $world = Get-ChildItem build -Recurse -Filter worldserver.exe | Select-Object -First 1
-          $auth = Get-ChildItem build -Recurse -Filter authserver.exe | Select-Object -First 1
+          $world = Get-ChildItem D:\\b -Recurse -Filter worldserver.exe | Select-Object -First 1
+          $auth = Get-ChildItem D:\\b -Recurse -Filter authserver.exe | Select-Object -First 1
           if (-not $world) { throw "worldserver.exe was not produced" }
           if (-not $auth) { throw "authserver.exe was not produced" }
 
